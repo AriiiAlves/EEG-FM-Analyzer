@@ -5,7 +5,7 @@ Two modules, used one after the other:
 1. **[`preprocessing.py`](preprocessing.py)**: `DatasetManager` loads an EEG dataset (**EEGDash**, **MOABB**, TUH, NMT, Sleep-EDF or any Braindecode `BaseConcatDataset`), cleans every recording (one recording per worker, optionally in parallel), cuts it into fixed-length windows, and saves the windows to disk.
 2. **[`models_bench.py`](models_bench.py)**: `BenchModel` and its subclasses (`BenchBrainomni`, `BenchLabram`, `BenchCBraMod`, `BenchBENDR`, `BenchBIOT`, `BenchEEGPT`, `BenchREVE`, `BenchLUNA`) adapt those windows to each pre-trained EEG foundation model, encode them into latent vectors, aggregate them by recording or by subject, and plot UMAPs of the latent space (including UMAPs of the windows labelled by event). Each run is logged in `benchmark-info.json`, and `UMAPReport` (or its shortcuts `full_report()` / `BenchModel.report()`) gathers the plots into a PDF.
 
-[`main.py`](main.py) runs both for the datasets used in this project and builds the PDF report (see [Running `main.py`](#running-mainpy)). [MONTAGES.md](MONTAGES.md) lists every MNE montage and its channel names.
+[`demo.py`](demo.py) runs both for the datasets used in this project and builds the PDF report (see [Running `demo.py`](#running-demopy)). [MONTAGES.md](MONTAGES.md) lists every MNE montage and its channel names.
 
 ---
 
@@ -15,31 +15,42 @@ Two modules, used one after the other:
 - **BrainOmni** is not on PyPI: its source code lives in [Models/BrainOmni/](Models/BrainOmni/) and `models_bench.py` adds that folder to `sys.path`. Its weights are downloaded from Hugging Face on first use. [requirements-brainomni.txt](requirements-brainomni.txt) is BrainOmni's own upstream `pip freeze` (CUDA 12.4, torch 2.5.1), kept for reference; the project itself runs on `requirements.txt`.
 - Every other model's weights come from Hugging Face through Braindecode (see [§13](#13-supported-models)). REVE and LUNA have their own licences.
 - Run everything from the repository root: the outputs (`./data`, `./PreProcessed-Datasets`, `./Model-Benchmarks`, `./Reports`) are created relative to the **current working directory**.
-- **Slow start:** importing torch, MNE, braindecode, eegdash and moabb can take minutes when `.venv` is on a network drive. `main.py` imports `models_bench` (torch + BrainOmni) even when only `preprocess()` runs, and every preprocessing worker re-imports the libraries when it starts.
+- **Slow start:** importing torch, MNE, braindecode, eegdash and moabb can take minutes when `.venv` is on a network drive. `demo.py` imports each library only in the step that needs it (preprocessing doesn't load torch), but every preprocessing worker still re-imports its libraries when it starts.
 
-## Running `main.py`
+## Running `demo.py`
 
-[`main.py`](main.py) has three steps, switched on and off by (un)commenting them in `if __name__ == "__main__":`
+[`demo.py`](demo.py) is the tutorial entry point. Edit the settings at the top of the file, then run `python demo.py` from the repository root.
 
-| Step | What it does |
+| Setting | What it controls |
 |---|---|
-| `preprocess()` | Runs `preprocess_and_window` for each dataset list (MOABB, EEGDash, and already-preprocessed EEGDash datasets with `skip_cleaning=True`). Every dataset is resampled to 256 Hz and cut into 512-sample windows (2 s) |
-| `bench(windows_mode, overwrite)` | For each dataset, builds every `Bench*` model (a model that doesn't fit is skipped and logged), then runs `windows_mode` (`"windows"` or `"windows-detailed"`) by recording, and `avg` / `median` / `std` by recording and by subject, with a UMAP for each |
-| `UMAPReport(...).build(...)` | Builds `Reports/UMAP-Full-Report.pdf` from the plots already in `Model-Benchmarks/` for the 8 models (no GPU needed) |
+| `RUN_PREPROCESSING`, `RUN_BENCHMARK`, `RUN_REPORT` | Which of the three steps run, in this order |
+| `OVERWRITE` | `False` skips recordings, embeddings and plots that already exist, so an interrupted run can be restarted |
+| `DATASETS` | One `dict` per dataset: `name`, `source` (`"moabb"` / `"eegdash"`), `montage`, `channels` (channel treatment function or `None`), `preprocessed`, optional `file_filter`, and `enabled` |
+| `WINDOWING` | Settings shared by every dataset: 256 Hz, 512-sample windows (2 s), average reference, units, `n_jobs` |
+| `CLEANING` | Used only for datasets with `preprocessed=False`: 0.1–75 Hz band-pass, 50/60 Hz notch, RANSAC, ICA, `bad_ch_tolerance=0.2`. Datasets with `preprocessed=True` get `skip_cleaning=True` instead |
+| `WINDOWS_MODE` | `"windows"` or `"windows-detailed"` (adds event UMAPs per recording and per subject) |
+| `models()` | The `Bench*` classes to compare |
+| `REPORT_PATH` | Where the PDF goes (`Reports/UMAP-Full-Report.pdf`) |
 
-As `main.py` stands now, `preprocess()` and `bench()` only run the already-preprocessed list (ds006923; the other loops are commented out), and `__main__` only builds the report.
+The three steps:
+
+| Step | Function | What it does |
+|---|---|---|
+| 1 | `preprocess(dataset)` | Loads the dataset with a new `DatasetManager` and runs `preprocess_and_window` into `PreProcessed-Datasets/<NAME>/` |
+| 2 | `benchmark(dataset)` | Builds every model (a model that doesn't fit is skipped and logged in `benchmark-info.json`), then runs `WINDOWS_MODE` by recording, and `avg` / `median` / `std` by recording and by subject, with a UMAP for each |
+| 3 | `report()` | Builds the PDF from the plots already in `Model-Benchmarks/` (no GPU needed) |
+
+As shipped, only `RUN_REPORT` is on and only ds006923 is `enabled`.
 
 ### Datasets used
 
 | Output folder | Source | Montage | Channel treatment | Notes |
 |---|---|---|---|---|
 | `BNCI2014_001` | MOABB | `colin27_1020` | none | Motor imagery (events `left_hand`, `right_hand`, `feet`, `tongue`) |
-| `DS006576` | EEGDash | `colin27_1020` | `ds006576_ch_treatment` (`EEG_Fp1` → `Fp1`) | REM sleep and memory differentiation |
+| `DS006576` | EEGDash | `colin27_1020` | `ds006576_channels` (`EEG_Fp1` → `Fp1`) | REM sleep and memory differentiation |
 | `DS007537` | EEGDash | `colin27_1020` | none | EEG, eye-tracking and physiology during smartphone use |
-| `DS007609` | EEGDash | `EGI_256` | none | Resting state and trait anxiety. Commented out in `main.py` |
-| `DS006923` | EEGDash, already preprocessed | `keep` | `ds006923_ch_treatment` (Biosemi 128 → 10-20 names) | Resting state of juvenile offenders. `file_filter="acq-epochs"`, `skip_cleaning=True`; 4 epochs of 50 s (eyes closed/open) |
-
-The datasets that aren't already preprocessed use the same cleaning: 0.1–75 Hz band-pass, 50 and 60 Hz notch, RANSAC, ICA, average reference, `bad_ch_tolerance=0.2`, `n_jobs=4`.
+| `DS007609` | EEGDash | `EGI_256` | none | Resting state and trait anxiety |
+| `DS006923` | EEGDash, already preprocessed | `keep` | `ds006923_channels` (Biosemi 128 → 10-20 names) | Resting state of juvenile offenders. `file_filter="acq-epochs"`, `preprocessed=True`; 4 epochs of 50 s (eyes closed/open) |
 
 ---
 
@@ -48,7 +59,7 @@ The datasets that aren't already preprocessed use the same cleaning: 0.1–75 Hz
 **Project**
 
 - [Setup](#setup)
-- [Running `main.py`](#running-mainpy)
+- [Running `demo.py`](#running-demopy)
 
 **Preprocessing (`preprocessing.py`)**
 
@@ -111,7 +122,7 @@ dm.preprocess_and_window(
 )
 ```
 
-See [main.py](main.py) (`preprocess`) for the call used in this project.
+See `preprocess()` in [demo.py](demo.py) for the call used in this project.
 
 ---
 
@@ -399,7 +410,7 @@ Returns nothing. Progress and errors are printed to stdout. At the end it prints
 
 > **Epoched recordings** (e.g. ds006923, 4 epochs of 50 s): EEGDash loads an epoched EEGLAB file as one raw, with the epochs joined end to end and a zero-duration annotation at the start of each epoch. Step 13b crops the end of each epoch to a whole number of windows, so no window mixes two epochs. It also stretches each annotation over its epoch, so every window gets the epoch label (`PostClosed` / `PostOpen`), which the event UMAPs of `models_bench.py` use. Each epoch loses less than one window of samples, and none when the epoch length is a multiple of `window_size`: in ds006923, 50 s at 256 Hz is exactly 25 windows of 512. Continuous recordings are not changed.
 
-> **ds006923 channels:** the Biosemi names (`A1`…`D32`) clash with 10-20 names at other positions (Biosemi `C3` is frontal), so LaBraM, EEGPT and BENDR would read them as the 10-20 channels. `ds006923_ch_treatment` in [main.py](main.py) sets the `biosemi128` positions, renames the 34 channels the dataset documents as exact 10-20 positions (for example `A1 (Cz)`), and prefixes the others with `BS-`. Use it with `montage="keep"`. `DS006923_USE_APPROX = True` also renames the 30 approximate ones (for example `A5 (approx: P1)`).
+> **ds006923 channels:** the Biosemi names (`A1`…`D32`) clash with 10-20 names at other positions (Biosemi `C3` is frontal), so LaBraM, EEGPT and BENDR would read them as the 10-20 channels. `ds006923_channels` in [demo.py](demo.py) sets the `biosemi128` positions, renames the 34 channels the dataset documents as exact 10-20 positions (for example `A1 (Cz)`), and prefixes the others with `BS-`. Use it with `montage="keep"`. `DS006923_USE_APPROX = True` also renames the 30 approximate ones (for example `A5 (approx: P1)`).
 
 > **Choosing `down_freq` and `window_size` for the models:** `models_bench.py` resamples and regroups the windows for each model ([§12](#12-model-input-requirements)), so one preprocessed dataset can feed all of them. Preprocess at the highest rate any model needs (256 Hz for BrainOmni) and downsample in the benchmark, never the other way around.
 
@@ -525,7 +536,7 @@ The function receives an `mne.io.Raw` and **must return it**. Use it to:
 - set channel types so EOG/ECG channels are recognised for step 7;
 - drop channels that can't be placed on the scalp.
 
-Define it at module level (e.g. in `main.py`) so it can be pickled and sent to the workers.
+Define it at module level (like `ds006576_channels` in [demo.py](demo.py)) so it can be pickled and sent to the workers.
 
 ```python
 def ds_treatment(raw):
@@ -582,7 +593,7 @@ for group_by in ["recording", "subject"]:
 
 The constructor checks the windows against the model's requirements **before** loading or downloading the model, so an incompatible dataset fails fast with a report. The report (config, warnings, errors) is also saved in `Model-Benchmarks/<MODEL_NAME>/benchmark-info.json`.
 
-See [main.py](main.py) (`bench(windows_mode, overwrite)`) for the loop over all datasets and models used in this project. It wraps each constructor and each mode in `try`/`except`: a model that doesn't fit a dataset (e.g. BIOT on unipolar recordings) or a step that fails is printed, saved in `benchmark-info.json` and skipped, and the loop goes on with the others.
+See `benchmark()` in [demo.py](demo.py) for the loop over all datasets and models used in this project. It wraps each constructor and each mode in `try`/`except`: a model that doesn't fit a dataset (e.g. BIOT on unipolar recordings) or a step that fails is printed, saved in `benchmark-info.json` and skipped, and the loop goes on with the others.
 
 ---
 
@@ -743,7 +754,7 @@ Each class docstring lists the preprocessing used in the model's paper. `BenchLa
 ### BIOT
 
 - **Paper preprocessing:** 200 Hz, 10 s windows, the 18 bipolar channels of the TUH double banana (+ `C3-A2`, `C4-A1`), each channel divided by the 95th percentile of its absolute amplitude.
-- **Channels:** the recording must **already have bipolar channels** named like `FP1-F7`. Unipolar recordings have no usable channel, so `verify_windows` fails (`MIN_CHANNELS`) and `main.py` skips the model. Missing bipolar channels are dropped: BIOT tokenizes each channel separately.
+- **Channels:** the recording must **already have bipolar channels** named like `FP1-F7`. Unipolar recordings have no usable channel, so `verify_windows` fails (`MIN_CHANNELS`) and `demo.py` skips the model. Missing bipolar channels are dropped: BIOT tokenizes each channel separately.
 - **Embedding:** the encoder forward rebuilt so each channel gets the embedding of its **BIOT position** (not of its index in `x`), then the transformer output averaged over tokens.
 
 ### EEGPT
@@ -796,7 +807,7 @@ Runs the model over every window and returns `(embeddings [N_windows, latent_dim
 
 ### `umap(overwrite=False)`
 
-With `overwrite=False`, plots that already exist are skipped (and the UMAP isn't fitted at all if every plot of the call exists), so an interrupted `bench()` can be re-run cheaply. `overwrite=True` regenerates them. Plots go to `umap_plots/<DS>/<mode>/`.
+With `overwrite=False`, plots that already exist are skipped (and the UMAP isn't fitted at all if every plot of the call exists), so an interrupted `benchmark()` can be re-run cheaply. `overwrite=True` regenerates them. Plots go to `umap_plots/<DS>/<mode>/`.
 
 Fits `umap.UMAP(min_dist=0.1, metric="cosine", random_state=42, init="random")` on `final_features`, with `n_neighbors = min(15, N-1)` for `"windows"` (many points) and `min(5, N-1)` for aggregated points. Skipped if there are fewer than 3 points. Then it saves one plot per column of the dataset `description` (columns that are all N/A are skipped; with `group_by="subject"`, columns that vary inside a subject, like `session` or `run`, are skipped too):
 
@@ -848,7 +859,7 @@ Called by the constructor (see [§12](#what-verify_windows-checks)). Can be call
 }
 ```
 
-`verify_windows` resets the entry with the model config (`benchmark_config()`: input requirements, channels, batch size, device, windows path) and the verification warnings/errors. Later calls append to `warnings` / `errors`; `status` is `"error"` as soon as there is one error. It is a classmethod, so `main.py` can record a model that failed in its constructor (`"Model skipped: ..."`). The PDF report reads it.
+`verify_windows` resets the entry with the model config (`benchmark_config()`: input requirements, channels, batch size, device, windows path) and the verification warnings/errors. Later calls append to `warnings` / `errors`; `status` is `"error"` as soon as there is one error. It is a classmethod, so `demo.py` can record a model that failed in its constructor (`"Model skipped: ..."`). The PDF report reads it.
 
 ### `window_info(window_ds)` (static)
 
@@ -874,7 +885,7 @@ The PDF has a cover, an overview table (plots and `benchmark-info.json` status b
 
 The 300 dpi PNGs are embedded as JPEG copies 1500 px wide (1000 px for the events-by-recording/subject grids, two per row), so the size grows with the number of plots: about 220 MB for the ~1850 plots of the 8 models × 5 datasets (most of them in the `windows-detailed` grids). Shrinking runs in a thread pool. Re-running a report overwrites it. Needs `reportlab`, which is imported only when a report is built.
 
-For any other set of models, or another file name, use `UMAPReport(base_dir, models).build(out_path, title)` directly. This is what [main.py](main.py) does for the full report:
+For any other set of models, or another file name, use `UMAPReport(base_dir, models).build(out_path, title)` directly. This is what [demo.py](demo.py) does for the full report:
 
 ```python
 from models_bench import UMAPReport
@@ -915,7 +926,7 @@ Relative to the **current working directory**:
             └── <MODEL>_<DS>_windows_umap[_with_z_score]_subject_<id>_label_event.png
 
 ./Reports/                                    ← UMAPReport, full_report() and BenchModel.report()
-├── UMAP-Full-Report.pdf                      ← main.py: the 8 models
+├── UMAP-Full-Report.pdf                      ← demo.py: the 8 models
 ├── UMAP-Report.pdf                           ← full_report(): every model folder
 └── UMAP-Report-<MODEL_NAME>.pdf              ← one model
 ```
@@ -972,7 +983,7 @@ class BenchMyModel(BenchModel):
         ...
 ```
 
-Everything else (verification, `benchmark-info.json`, resampling, regrouping, units, z-score, batching, caching, aggregation, UMAP, report) is inherited. Add the class to the list in `bench()` of [main.py](main.py) to run it.
+Everything else (verification, `benchmark-info.json`, resampling, regrouping, units, z-score, batching, caching, aggregation, UMAP, report) is inherited. Add the class to `models()` in [demo.py](demo.py) to run it.
 
 ---
 
@@ -992,5 +1003,5 @@ Everything else (verification, `benchmark-info.json`, resampling, regrouping, un
 | 10 | Few aggregated points (e.g. 9 subjects) give a UMAP with `n_neighbors` ≤ 5 that mostly reflects noise; read those plots with care | [models_bench.py:539](models_bench.py#L539) |
 | 11 | With `group_by="subject"`, windows of all the subject's recordings are pooled before aggregating, so recordings with more windows weigh more in the subject's point (see [How aggregation works](#how-aggregation-works-example-with-group_bysubject)) | [models_bench.py:471](models_bench.py#L471) |
 | 12 | `umap(overwrite=False)` only checks that the PNG exists. After changing the windows, the model or the cache, pass `overwrite=True` (or delete `umap_plots/<DS>/`), or the old plots are kept | [models_bench.py:518](models_bench.py#L518) |
-| 13 | Models that match channels by name (LaBraM, BENDR, BIOT, EEGPT) only see channels named like 10-20. Names that clash with 10-20 at other positions (Biosemi `A1`…`D32`) are read as the 10-20 channels; rename them in `channels_treatment` (see `ds006923_ch_treatment`). BIOT needs bipolar channels, which none of the project's datasets have | `match_model_channels` |
+| 13 | Models that match channels by name (LaBraM, BENDR, BIOT, EEGPT) only see channels named like 10-20. Names that clash with 10-20 at other positions (Biosemi `A1`…`D32`) are read as the 10-20 channels; rename them in `channels_treatment` (see `ds006923_channels` in demo.py). BIOT needs bipolar channels, which none of the project's datasets have | `match_model_channels` |
 | 14 | BENDR fills the missing 10-20 channels with zeros: with few matched channels, most of its input is zeros | `BenchBENDR.embed` |
